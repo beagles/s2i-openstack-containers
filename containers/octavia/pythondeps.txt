@@ -1,0 +1,9 @@
+# Database driver (mysql extra for oslo.db)
+oslo.db[mysql]
+# TaskFlow Redis jobboard driver (octavia.worker.jobboard_driver
+# entry point "redis_taskflow_driver"), used by the worker,
+# housekeeping and health-manager services for active-active job
+# coordination. Matches the "Requires: python3-redis" in the RDO
+# openstack-octavia spec for those subpackages. Harmless to install
+# in the API image too since it is a pure-python client library.
+redis

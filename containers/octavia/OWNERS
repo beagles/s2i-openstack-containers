@@ -1,0 +1,13 @@
+# See the OWNERS docs at https://www.kubernetes.dev/docs/guide/owners/
+# TODO: replace with the actual Octavia container maintainers.
+approvers:
+  - beagles
+  - gthiemonge
+  - richardcruise87
+  - omersch381
+
+reviewers:
+  - beagles
+  - gthiemonge
+  - richardcruise87
+  - omersch381

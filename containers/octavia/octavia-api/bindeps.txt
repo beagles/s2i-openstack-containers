@@ -1,0 +1,7 @@
+# Apache WSGI server for octavia-api
+httpd
+mod_ssl
+python3-mod_wsgi
+# DNS resolution library bindings used by the OVN provider driver /
+# DNS-related integrations (matches tcib octavia-api package list)
+python3-unbound
