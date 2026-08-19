@@ -1,0 +1,98 @@
+# Octavia amphora VM image (qcow2) -- built FULLY UNPRIVILEGED and hermetic.
+#
+# Unlike the other images in this repo (which package a Python service to run
+# *as* a container), this is a CARRIER image: it assembles a bootable VM disk
+# image (amphora.qcow2) and ships it inside a thin container so that a pod can
+# copy it out and upload it to Glance. This mirrors the delivery model of the
+# downstream rhoso-images amphora container -- the difference is HOW the disk
+# is built.
+#
+# The traditional amphora build uses diskimage-builder, which needs privileged
+# host operations (losetup/loopback, privileged mount, kpartx, chroot with
+# device nodes, grub2-install to a block device). Konflux runs rootless and
+# hermetic, so none of that is available.
+#
+# The approach here splits the job in two:
+#
+#   Stage 1 (rootfs)   -- install packages + the amphora agent into a plain
+#                         directory. This is ordinary, provenance-friendly work
+#                         that a Containerfile layer already does.
+#   Stage 2 (assemble) -- turn that directory into a partitioned, bootable
+#                         qcow2 using ONLY userspace tools:
+#                           * mke2fs -d       (populate ext4 from a dir, no mount)
+#                           * mkfs.vfat+mtools(populate the ESP, no mount)
+#                           * sgdisk          (GPT written directly to a file)
+#                           * grub2-mkstandalone (self-contained UEFI bootloader)
+#                           * qemu-img convert(raw -> qcow2, no KVM)
+#                         No loopback, no privileged mount, no kpartx, no
+#                         /dev/kvm -- so it runs inside the Konflux sandbox.
+#   Stage 3 (carrier)  -- thin final image that just holds the qcow2.
+#
+# See scripts/build-amphora-disk.sh and README.md for details and the list of
+# items a production build still has to validate (boot on real OVMF, SELinux
+# relabel policy, aarch64, secure boot).
+
+ARG BASE_IMAGE=localhost/openstack/openstack-base:latest
+
+# ---------------------------------------------------------------------------
+# Stage 1: rootfs
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE} AS rootfs
+
+ARG CONSTRAINTS_FILE=requirements.lock
+COPY ${CONSTRAINTS_FILE} /deps-upper-constraints.txt
+COPY src/ /src/
+
+# Tooling needed to provision a *second* rootfs via dnf --installroot and to
+# generate a generic initramfs. git-core is required so pbr can derive the
+# octavia version from the pinned source checkout during the pip install.
+RUN microdnf -y install dnf dnf-plugins-core systemd dracut kmod git-core && \
+    microdnf clean all && rm -rf /var/cache/dnf
+
+COPY octavia-amphora-image/scripts/provision-rootfs.sh /tmp/provision-rootfs.sh
+RUN /tmp/provision-rootfs.sh /amphora-rootfs /src/octavia /deps-upper-constraints.txt
+
+# ---------------------------------------------------------------------------
+# Stage 2: assemble (the unprivileged disk build -- the whole point)
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE} AS assemble
+
+# coreutils (dd/truncate/du/sha256sum) is already provided by the base image's
+# coreutils-single, so it is intentionally not listed here (it would conflict).
+RUN microdnf -y install \
+      e2fsprogs dosfstools mtools gdisk \
+      grub2-tools grub2-tools-extra grub2-efi-x64-modules \
+      qemu-img && \
+    microdnf clean all && rm -rf /var/cache/dnf
+
+COPY --from=rootfs /amphora-rootfs /amphora-rootfs
+COPY octavia-amphora-image/scripts/build-amphora-disk.sh /usr/local/bin/build-amphora-disk.sh
+RUN chmod 755 /usr/local/bin/build-amphora-disk.sh && \
+    mkdir -p /output && \
+    /usr/local/bin/build-amphora-disk.sh /amphora-rootfs /output/amphora.qcow2 && \
+    sha256sum /output/amphora.qcow2 | awk '{print $1}' > /output/amphora.qcow2.sha256 && \
+    qemu-img info /output/amphora.qcow2
+
+# ---------------------------------------------------------------------------
+# Stage 3: carrier
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE}
+
+LABEL summary="OpenStack Octavia amphora VM image (qcow2)" \
+      io.k8s.description="Carrier image holding the Octavia amphora qcow2, assembled unprivileged/hermetic for Konflux; a pod extracts it and uploads it to Glance"
+
+# The base image does not create the octavia user; do it here so the final
+# USER directive resolves.
+RUN uid_gid_manage octavia
+
+RUN mkdir -p /usr/share/octavia-amphora-images
+COPY --from=assemble /output/amphora.qcow2        /usr/share/octavia-amphora-images/amphora.qcow2
+COPY --from=assemble /output/amphora.qcow2.sha256 /usr/share/octavia-amphora-images/amphora.qcow2.sha256
+COPY octavia-amphora-image/scripts/upload-amphora-image.sh /usr/local/bin/upload-amphora-image.sh
+RUN chmod 644 /usr/share/octavia-amphora-images/amphora.qcow2* && \
+    chmod 755 /usr/local/bin/upload-amphora-image.sh
+
+USER octavia
+# Default command documents intended use; the operator normally execs the
+# upload helper (or copies the file out) with credentials injected.
+CMD ["/usr/local/bin/upload-amphora-image.sh"]
