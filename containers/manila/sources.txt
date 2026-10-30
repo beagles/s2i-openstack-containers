@@ -1,2 +1,2 @@
-master upper-constraints https://opendev.org/openstack/requirements.git stable/2026.2 0f4ec11eed11de1891d7bf30a4cd72f7032e411f -
-master manila https://opendev.org/openstack/manila.git stable/2026.2 2ae23e7bd99aa2db6846c27a9c613f7470a44f75 23.0.1.dev2
+master upper-constraints https://opendev.org/openstack/requirements.git stable/2026.2 dfd17433f51c9080e8441719b2f28752a660910b -
+master manila https://opendev.org/openstack/manila.git stable/2026.2 4fbc4b4f3688e916428a7d95d10009d414e705ab 23.0.1

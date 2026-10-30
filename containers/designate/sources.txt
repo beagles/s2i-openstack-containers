@@ -1,2 +1,2 @@
-master upper-constraints https://opendev.org/openstack/requirements.git stable/2026.2 0f4ec11eed11de1891d7bf30a4cd72f7032e411f -
-master designate https://opendev.org/openstack/designate.git stable/2026.2 543ba092a125c3d89a4eab5a416efa4c311176f2 23.0.1.dev2
+master upper-constraints https://opendev.org/openstack/requirements.git stable/2026.2 dfd17433f51c9080e8441719b2f28752a660910b -
+master designate https://opendev.org/openstack/designate.git stable/2026.2 bcc56c97dfc9c29582ea6e1211e6587af46559ee 23.0.1.dev19

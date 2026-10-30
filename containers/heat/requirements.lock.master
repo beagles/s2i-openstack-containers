@@ -53,7 +53,7 @@ oslo-context==6.5.0
 oslo-db==18.1.1
 oslo-i18n==6.9.0
 oslo-log==8.3.2
-oslo-messaging==18.3.0
+oslo-messaging==18.3.1
 oslo-metrics==0.17.0
 oslo-middleware==8.2.0
 oslo-policy==6.0.1
@@ -100,7 +100,7 @@ python-memcached==1.62
 python-neutronclient==14.0.0
 python-novaclient==18.13.1
 python-octaviaclient==3.15.0
-python-openstackclient==10.3.0
+python-openstackclient==10.3.1
 python-swiftclient==4.11.0
 python-zaqarclient==4.7.0
 pyyaml==6.0.3
