@@ -1,2 +1,2 @@
 # stream  name   repo                                  branch  pinned-hash                               version
-master goose https://github.com/aaif-goose/goose.git main 9560429ff982bbfecec5094963e5f34696b63a1c -
+master goose https://github.com/aaif-goose/goose.git main 4facf56cbab049142809d9afa4648ebe6823ba80 -

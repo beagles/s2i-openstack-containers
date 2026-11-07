@@ -36,7 +36,7 @@ jmespath==1.1.0
 jsonpatch==1.33
 jsonpointer==3.1.1
 keystoneauth1==5.17.0
-keystonemiddleware==13.0.1
+keystonemiddleware==13.0.2
 kombu==5.6.2
 mako==1.4.1
 markdown-it-py==4.2.0
@@ -55,7 +55,7 @@ oslo-context==6.5.0
 oslo-db==18.1.1
 oslo-i18n==6.9.0
 oslo-log==8.3.2
-oslo-messaging==18.3.0
+oslo-messaging==18.3.1
 oslo-metrics==0.17.0
 oslo-middleware==8.2.0
 oslo-policy==6.0.1
