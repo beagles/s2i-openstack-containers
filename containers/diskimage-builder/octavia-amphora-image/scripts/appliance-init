@@ -1,0 +1,64 @@
+#!/bin/bash
+# PID 1 inside QEMU only. Nothing in this file runs on the container host.
+set -Eeuo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME=/root LANG=C.UTF-8
+
+finish() {
+    local status=$?
+    trap - EXIT
+    echo "Amphora appliance finished with status ${status}"
+    cd /
+    if mountpoint -q /work; then
+        printf '%s\n' "${status}" > /work/result.status
+        sync
+        if ! umount /work; then
+            echo 1 > /work/result.status
+            sync
+        fi
+    fi
+    sync
+    # libc reboot(POWER_OFF), without systemd or a running shutdown service.
+    python3 -c 'import ctypes; ctypes.CDLL(None).reboot(0x4321fedc)'
+    # If poweroff failed, panic rather than hang forever as PID 1.
+    exit 1
+}
+trap finish EXIT
+
+mountpoint -q /proc || mount -t proc proc /proc
+mountpoint -q /sys || mount -t sysfs sysfs /sys
+mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /run /work
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /run
+chmod 1777 /tmp /var/tmp
+modprobe virtio_net
+modprobe loop
+modprobe dm_mod
+mount /dev/vdb /work
+
+# A third, read-only disk transports configuration without QEMU command-line
+# interpolation. It contains only explicitly selected build/proxy settings.
+mkdir -p /run/amphora-config
+mount -o ro /dev/vdc /run/amphora-config
+source /run/amphora-config/build.env
+umount /run/amphora-config
+
+ip link set lo up
+for iface in /sys/class/net/*; do
+    iface=${iface##*/}
+    [[ ${iface} == lo ]] && continue
+    ip link set "${iface}" up
+    ip addr add 10.0.2.15/24 dev "${iface}"
+    ip route add default via 10.0.2.2
+    break
+done
+rm -f /etc/resolv.conf
+printf 'nameserver 10.0.2.3\n' > /etc/resolv.conf
+
+# No udev daemon: use DIB's existing container-aware mapper-node creation.
+touch /.dockerenv
+export TMPDIR=/work/tmp
+mkdir -p "${TMPDIR}" /work/output
+cd /work
+/usr/local/libexec/amphora-build-image 2>&1 | tee /work/build.log

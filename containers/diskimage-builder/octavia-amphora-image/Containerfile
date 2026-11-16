@@ -1,0 +1,143 @@
+ARG BASE_IMAGE=localhost/openstack/openstack-base:latest
+
+# Build context: containers/diskimage-builder (the same as the IPA image).
+# DIB runs in a software-emulated appliance, never on host block devices.
+FROM ${BASE_IMAGE} AS tooling
+
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+ARG CONSTRAINTS_FILE=requirements.lock
+ARG SOURCE_VERSION_STREAM=master
+ARG AMPHORA_CONSTRAINTS_FILE=upper-constraints.txt.${SOURCE_VERSION_STREAM}
+COPY ${CONSTRAINTS_FILE} /deps-upper-constraints.txt
+COPY ${AMPHORA_CONSTRAINTS_FILE} /amphora-upper-constraints.txt
+COPY sources.txt /source-versions/project.txt
+COPY octavia-amphora-image/sources.txt /source-versions/image.txt
+COPY src/ /src/
+COPY octavia-amphora-image/src/octavia/ /src/octavia/
+COPY octavia-amphora-image/src/gdisk/ /src/gdisk/
+
+COPY octavia-amphora-image/builddeps.txt /tmp/builddeps.txt
+RUN pkgs=$(grep -vE '^#|^$' /tmp/builddeps.txt | tr '\n' ' ') && \
+    microdnf -y install ${pkgs} && microdnf clean all && \
+    rm /tmp/builddeps.txt
+
+# RHEL 10 does not ship gdisk. Build sgdisk as in the IPA prototype; it is
+# needed by DIB when creating GPT partition tables.
+WORKDIR /src/gdisk
+RUN make -j"$(nproc)" sgdisk && \
+    install -m 0755 sgdisk /usr/local/sbin/sgdisk
+
+ARG PIP_NO_BINARY=""
+ENV PIP_NO_BINARY=${PIP_NO_BINARY}
+COPY pythonbuilddeps.txt /tmp/pythonbuilddeps.txt
+RUN pkgs=$(grep -vE '^#|^$' /tmp/pythonbuilddeps.txt | tr '\n' ' ') && \
+    pip3 install --no-cache-dir -c /deps-upper-constraints.txt ${pkgs} && \
+    rm /tmp/pythonbuilddeps.txt
+
+# Use the patched checkout supplied by the project sources.txt, NOT the
+# published DIB wheel pinned in the lockfile. PBR_VERSION is needed because
+# build.sh's shallow Gerrit checkout has no release tags (see cfcf54b).
+RUN sed '/^diskimage[-_]builder[=!<>]/Id' /deps-upper-constraints.txt > /tmp/dib-constraints.txt && \
+    version=$(awk -v stream="${SOURCE_VERSION_STREAM}" \
+      '$1 == stream && $2 == "diskimage-builder" { print $6; exit }' \
+      /source-versions/project.txt) && \
+    test -n "${version}" && test "${version}" != '-' && \
+    PBR_VERSION="${version}" pip3 wheel --no-cache-dir --no-deps \
+      --no-build-isolation --wheel-dir=/wheels /src/diskimage-builder && \
+    pip3 install --no-cache-dir --prefix=/usr -c /tmp/dib-constraints.txt /wheels/*.whl
+ENV PIP_NO_BINARY=""
+
+# Give the local Octavia checkout its recorded version so PBR also works in
+# DIB's clone of this shallow repository. Only the container copy is changed.
+RUN version=$(awk -v stream="${SOURCE_VERSION_STREAM}" \
+      '$1 == stream && $2 == "octavia" { print $6; exit }' \
+      /source-versions/image.txt) && \
+    test -n "${version}" && test "${version}" != '-' && \
+    git -C /src/octavia tag -f "${version}" HEAD
+
+COPY octavia-amphora-image/scripts/appliance-init /usr/local/libexec/amphora-appliance-init
+COPY octavia-amphora-image/scripts/build-image /usr/local/libexec/amphora-build-image
+RUN chmod 0755 /usr/local/libexec/amphora-*
+
+# Prefer the distribution emulator if it supports TCG; build missing support
+# from pinned source instead of falling back to KVM or elevated permissions.
+FROM tooling AS emulator
+ARG FORCE_SOURCE_QEMU=0
+COPY octavia-amphora-image/qemubuilddeps.txt /tmp/qemubuilddeps.txt
+COPY octavia-amphora-image/src/qemu/ /src/qemu/
+RUN if [[ "${FORCE_SOURCE_QEMU}" != 1 ]] && \
+      microdnf -y install qemu-kvm-core && /usr/libexec/qemu-kvm -accel help | grep -qx tcg; then \
+      ln -s /usr/libexec/qemu-kvm /usr/local/bin/qemu-system-x86_64; \
+    else \
+      pkgs=$(grep -vE '^#|^$' /tmp/qemubuilddeps.txt | tr '\n' ' ') && \
+      microdnf -y install ${pkgs} && microdnf clean all && \
+      mkdir -p /src/qemu/build && cd /src/qemu/build && \
+      ../configure --prefix=/opt/qemu --target-list=x86_64-softmmu \
+        --without-default-features --enable-tcg --enable-slirp \
+        --disable-kvm --disable-rust --disable-docs --disable-werror && \
+      ninja -j2 qemu-system-x86_64 && \
+      install -D -m 0755 qemu-system-x86_64 /opt/qemu/bin/qemu-system-x86_64 && \
+      mkdir -p /opt/qemu/share/qemu && \
+      cp ../pc-bios/bios-256k.bin ../pc-bios/kvmvapic.bin /opt/qemu/share/qemu/ && \
+      ln -s /opt/qemu/bin/qemu-system-x86_64 /usr/local/bin/qemu-system-x86_64; \
+    fi && microdnf clean all
+RUN if [[ -x /opt/qemu/bin/qemu-system-x86_64 ]]; then \
+      cp /src/qemu/pc-bios/linuxboot_dma.bin /src/qemu/pc-bios/pvh.bin /opt/qemu/share/qemu/; \
+    fi
+
+# Prepare a bootable copy of the tooling filesystem without mounting an image.
+FROM emulator AS appliance
+COPY octavia-amphora-image/scripts/run-appliance /usr/local/bin/run-amphora-appliance
+RUN chmod 0755 /usr/local/bin/run-amphora-appliance
+RUN mkdir -p /appliance && \
+    kernel=$(find /usr/lib/modules -name vmlinuz | sort -V | tail -1) && \
+    test -n "${kernel}" && kver=$(basename "$(dirname "${kernel}")") && \
+    cp "${kernel}" /appliance/vmlinuz && \
+    DRACUT_NO_XATTR=1 dracut --force --no-hostonly --no-hostonly-cmdline \
+      --modules "base rootfs-block kernel-modules" \
+      --add-drivers "virtio_pci virtio_blk ext4" \
+      /appliance/initramfs.img "${kver}"
+RUN --mount=from=tooling,src=/,dst=/tooling-root,ro \
+    mkdir -p /appliance/root && \
+    tar -C /tooling-root -cf - --exclude='./dev/*' --exclude='./proc/*' \
+      --exclude='./sys/*' --exclude='./run/*' --exclude='./tmp/*' \
+      --exclude='./var/tmp/*' --exclude='./var/cache/*' . | \
+      tar -C /appliance/root -xf - && \
+    truncate -s 6G /appliance/root.ext4 && \
+    mkfs.ext4 -q -F -d /appliance/root /appliance/root.ext4 && \
+    rm -rf /appliance/root
+
+# Test exactly the same isolation/device boundary without downloading guest RPMs.
+FROM appliance AS smoke
+RUN AMPHORA_MEMORY=2048 AMPHORA_WORK_DISK=2G run-amphora-appliance --smoke
+
+FROM appliance AS build
+ARG IMAGE_NAME=amphora-x64-haproxy
+ARG AMPHORA_MEMORY=4096
+ARG AMPHORA_CPUS=2
+ARG AMPHORA_WORK_DISK=32G
+ARG AMPHORA_TIMEOUT=6h
+WORKDIR /build
+RUN run-amphora-appliance
+
+# Package only the finished artifact, not the build tools.
+FROM ${BASE_IMAGE}
+
+LABEL summary="Octavia amphora image" \
+      io.k8s.description="CentOS Stream 10 minimal-based Octavia amphora qcow2 image"
+
+ARG IMAGE_NAME=amphora-x64-haproxy
+ENV SRC_DIR=/build \
+    DEST_DIR=/target \
+    CHECKSUM_FILE=${IMAGE_NAME}.sha256
+
+COPY copy_out.sh /copy_out.sh
+COPY --from=build /build/${IMAGE_NAME}.qcow2 /build/
+WORKDIR /build
+RUN chmod 0755 /copy_out.sh && sha256sum "${IMAGE_NAME}.qcow2" > "${CHECKSUM_FILE}"
+
+# Override the base image's service entrypoint: running this image only
+# copies the qcow2 and checksums into the mounted /target directory.
+ENTRYPOINT ["/copy_out.sh"]

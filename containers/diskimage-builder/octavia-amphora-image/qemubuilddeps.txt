@@ -1,0 +1,16 @@
+# Build a TCG system emulator; no KVM, libvirt, or host block-device access.
+diffutils
+gcc
+gcc-c++
+git
+glib2-devel
+libslirp-devel
+make
+meson
+ninja-build
+pkgconf-pkg-config
+python3-devel
+python3-pip
+python3-setuptools
+python3-wheel
+zlib-devel

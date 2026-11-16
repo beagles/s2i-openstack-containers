@@ -1,0 +1,35 @@
+# Host-side tools for bootstrapping a minimal guest and creating a bootable qcow2.
+binutils
+bzip2
+curl
+device-mapper
+dnf
+# yum-minimal uses dnf download to fetch bootstrap RPMs.
+dnf-plugins-core
+dosfstools
+e2fsprogs
+findutils
+git
+kpartx
+procps-ng
+qemu-img
+sudo
+tar
+util-linux
+which
+xfsprogs
+xz
+# The appliance uses a packaged kernel; no host modules or devices are used.
+cpio
+dracut
+iproute
+kernel-core
+kernel-modules-core
+# Runtime libraries for the source-built QEMU on the container side.
+libslirp
+glib2
+# Compile sgdisk (not packaged in RHEL 10).
+gcc-c++
+libuuid-devel
+make
+popt-devel

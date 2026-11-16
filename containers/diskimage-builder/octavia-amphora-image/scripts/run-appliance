@@ -1,0 +1,74 @@
+#!/bin/bash
+# Container-side runner. Only regular files and userspace sockets are used.
+set -euo pipefail
+export PATH=/opt/qemu/bin:${PATH}
+
+IMAGE_NAME=${IMAGE_NAME:-amphora-x64-haproxy}
+AMPHORA_MEMORY=${AMPHORA_MEMORY:-4096}
+AMPHORA_CPUS=${AMPHORA_CPUS:-2}
+AMPHORA_WORK_DISK=${AMPHORA_WORK_DISK:-32G}
+AMPHORA_TIMEOUT=${AMPHORA_TIMEOUT:-6h}
+AMPHORA_SMOKE=0
+if [[ ${1:-} == --smoke && $# == 1 ]]; then
+    AMPHORA_SMOKE=1
+elif [[ $# != 0 ]]; then
+    echo 'Usage: run-amphora-appliance [--smoke]' >&2
+    exit 2
+fi
+[[ ${IMAGE_NAME} =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || { echo 'Invalid IMAGE_NAME' >&2; exit 2; }
+[[ ${AMPHORA_MEMORY} =~ ^[0-9]+$ && ${AMPHORA_CPUS} =~ ^[0-9]+$ ]] || exit 2
+[[ ${AMPHORA_WORK_DISK} =~ ^[1-9][0-9]*[MG]$ ]] || exit 2
+
+output_dir=${AMPHORA_OUTPUT_DIR:-/build}
+mkdir -p "${output_dir}"
+scratch=$(mktemp -d "${output_dir}/appliance.XXXXXX")
+trap 'rm -rf "${scratch}"' EXIT
+rm -f "${output_dir}/${IMAGE_NAME}.qcow2"
+mkdir "${scratch}/config"
+export IMAGE_NAME AMPHORA_SMOKE
+# Shell-quote values so proxy credentials cannot become guest shell commands.
+python3 - "${scratch}/config/build.env" <<'PY'
+import os
+import shlex
+import sys
+
+names = ("IMAGE_NAME", "AMPHORA_SMOKE", "http_proxy", "https_proxy", "no_proxy",
+         "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
+with open(sys.argv[1], "w") as stream:
+    for name in names:
+        if name in os.environ:
+            stream.write(f"export {name}={shlex.quote(os.environ[name])}\n")
+PY
+truncate -s 8M "${scratch}/config.ext4"
+mkfs.ext4 -q -F -d "${scratch}/config" "${scratch}/config.ext4"
+truncate -s "${AMPHORA_WORK_DISK}" "${scratch}/work.ext4"
+mkfs.ext4 -q -F "${scratch}/work.ext4"
+
+# An overlay keeps the prepared appliance pristine across smoke/full runs.
+qemu-img create -q -f qcow2 -F raw -b /appliance/root.ext4 "${scratch}/root.qcow2"
+set +e
+timeout --signal=TERM --kill-after=30s "${AMPHORA_TIMEOUT}" \
+    qemu-system-x86_64 \
+      -machine q35 -accel tcg,thread=multi -cpu max \
+      -m "${AMPHORA_MEMORY}" -smp "${AMPHORA_CPUS}" \
+      -nodefaults -no-reboot -display none -monitor none -serial stdio \
+      -kernel /appliance/vmlinuz -initrd /appliance/initramfs.img \
+      -append 'root=/dev/vda rw console=ttyS0 panic=1 selinux=0 init=/usr/local/libexec/amphora-appliance-init' \
+      -drive "file=${scratch}/root.qcow2,format=qcow2,if=virtio" \
+      -drive "file=${scratch}/work.ext4,format=raw,if=virtio" \
+      -drive "file=${scratch}/config.ext4,format=raw,if=virtio,readonly=on" \
+      -netdev user,id=net0,restrict=off \
+      -device virtio-net-pci,netdev=net0,romfile=
+qemu_status=$?
+set -e
+
+# QEMU's exit code alone does not indicate guest success (including panics).
+debugfs -R "dump /build.log ${output_dir}/${IMAGE_NAME}.build.log" "${scratch}/work.ext4" 2>/dev/null || true
+status=$(debugfs -R 'cat /result.status' "${scratch}/work.ext4" 2>/dev/null) || status=missing
+if [[ ${qemu_status} != 0 || ${status} != 0 ]]; then
+    echo "Amphora build failed: QEMU=${qemu_status}, guest=${status:-missing}; see serial output above" >&2
+    exit 1
+fi
+debugfs -R "dump /output/${IMAGE_NAME}.qcow2 ${output_dir}/${IMAGE_NAME}.qcow2" "${scratch}/work.ext4"
+test -s "${output_dir}/${IMAGE_NAME}.qcow2"
+qemu-img check -f qcow2 "${output_dir}/${IMAGE_NAME}.qcow2"

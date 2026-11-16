@@ -1,0 +1,39 @@
+#!/bin/bash
+set -euo pipefail
+
+if [[ ${AMPHORA_SMOKE:-0} == 1 ]]; then
+    # Exercise the actual operations denied by a restricted outer container.
+    truncate -s 128M /work/smoke.raw
+    device=$(losetup --find --show /work/smoke.raw)
+    sgdisk -o -n 1:2048:0 "${device}"
+    kpartx -av "${device}"
+    dmsetup --noudevsync mknodes
+    partition="/dev/mapper/${device##*/}p1"
+    mkfs.ext4 -q "${partition}"
+    mkdir -p /work/mnt
+    mount "${partition}" /work/mnt
+    echo 'amphora appliance smoke test' > /work/mnt/success
+    chroot / /bin/true
+    umount /work/mnt
+    kpartx -d "${device}"
+    losetup -d "${device}"
+    qemu-img convert -f raw -O qcow2 /work/smoke.raw "/work/output/${IMAGE_NAME}.qcow2"
+else
+    export ELEMENTS_PATH=/src/octavia/elements
+    export DIB_RELEASE=10-stream DIB_YUM_MINIMAL_CREATE_INTERFACES=0
+    export DIB_BIND_MOUNTS=1 DIB_NO_TMPFS=1 DIB_GRUB_TIMEOUT=0
+    export DIB_CLOUD_INIT_DATASOURCES=ConfigDrive
+    export DIB_OCTAVIA_AMP_USE_NFTABLES=True DIB_OCTAVIA_AMP_USE_SSH=True
+    export DIB_REPOLOCATION_amphora_agent=/src/octavia
+    export DIB_REPOREF_amphora_agent
+    DIB_REPOREF_amphora_agent=$(git -C /src/octavia rev-parse HEAD)
+    export DIB_REPOLOCATION_upper_constraints=file:///amphora-upper-constraints.txt
+    # Use released octavia-lib from the full guest constraints, not master.
+    export DIB_INSTALLTYPE_octavia_lib=package
+    disk-image-create -a amd64 -t qcow2 -o "/work/output/${IMAGE_NAME}" --no-tmpfs \
+        base vm centos-minimal haproxy-octavia rebind-sshd no-resolvconf \
+        amphora-agent octavia-lib sos cloud-init-datasources remove-default-ints \
+        selinux-permissive disable-makecache keepalived-octavia ipvsadmin \
+        pip-cache certs-ramfs
+fi
+qemu-img check "/work/output/${IMAGE_NAME}.qcow2"
