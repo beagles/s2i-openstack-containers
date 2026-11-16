@@ -1,0 +1,17 @@
+# Same MBR/root layout selected by the baseline's vm element; only level0 differs.
+- ublk:
+    name: image0
+
+- partitioning:
+    base: image0
+    label: mbr
+    partitions:
+      - name: root
+        flags: [boot, primary]
+        size: 100%
+        mkfs:
+          mount:
+            mount_point: /
+            fstab:
+              options: defaults
+              fsck-passno: 1

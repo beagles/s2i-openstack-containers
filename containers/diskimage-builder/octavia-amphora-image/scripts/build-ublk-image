@@ -1,0 +1,121 @@
+#!/bin/bash
+set -euo pipefail
+
+if [[ $# == 1 && $1 == --smoke ]]; then
+    smoke=1
+elif [[ $# == 0 ]]; then
+    smoke=0
+else
+    echo 'Usage: build-amphora-ublk [--smoke]' >&2
+    exit 2
+fi
+IMAGE_NAME=${IMAGE_NAME:-amphora-x64-haproxy}
+export AMPHORA_UBLK_ID=${AMPHORA_UBLK_ID:-0}
+[[ ${IMAGE_NAME} =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || exit 2
+[[ ${AMPHORA_UBLK_ID} =~ ^[0-9]+$ && ${#AMPHORA_UBLK_ID} -le 4 ]] || exit 2
+(( 10#${AMPHORA_UBLK_ID} <= 4095 )) || exit 2
+export AMPHORA_UBLK_ID=$((10#${AMPHORA_UBLK_ID}))
+AMPHORA_SELINUX=${AMPHORA_SELINUX:-permissive}
+case ${AMPHORA_SELINUX} in
+    permissive) selinux_element=selinux-permissive ;;
+    disabled) selinux_element=amphora-no-selinux ;;
+    *) echo 'AMPHORA_SELINUX must be permissive or disabled' >&2; exit 2 ;;
+esac
+# Check before bootstrap/downloads; never auto-modprobe or relax security policy.
+amphora-ublk-preflight
+mkdir -p /build
+touch /.dockerenv  # Use DIB's existing container-aware mapper-node creation.
+export DIB_NO_TMPFS=1 DIB_BIND_MOUNTS=1
+export DIB_BLOCK_DEVICE_CONFIG=file:///src/dib-ublk/block-device.yaml
+
+if [[ ${smoke} == 1 ]]; then
+    # The pinned DIB exposes this as a Python module, not a console script.
+    dib_block_device() { python3 -m diskimage_builder.block_device.cmd "$@"; }
+    scratch=$(mktemp -d /build/ublk-smoke.XXXXXX)
+    created=0
+    unmounted=0
+    smoke_exit() {
+        local status=$?
+        trap - EXIT
+        if [[ ${status} != 0 ]]; then
+            if [[ ${created} == 1 && ${unmounted} == 0 ]]; then
+                if ! dib_block_device --params "${scratch}/params.yaml" umount; then
+                    # DIB fstrim may fail before unmount. Still attempt safe
+                    # teardown of only this smoke test's mount and device.
+                    if { ! mountpoint -q "${scratch}/mnt" || umount "${scratch}/mnt"; } && \
+                        kpartx -d "/dev/ublkb${AMPHORA_UBLK_ID}"; then
+                        python3 -c 'import os; from amphora_dib_ublk import ublkdev_detach; ublkdev_detach(int(os.environ["AMPHORA_UBLK_ID"]))' || true
+                    fi
+                    echo 'Inspect retained state before removing any backing file.' >&2
+                fi
+            fi
+            # Keep state on failure for diagnosis; never delete an attached file.
+            echo "ublk smoke failed; retained ${scratch}" >&2
+        fi
+        exit "${status}"
+    }
+    trap smoke_exit EXIT
+    cat > "${scratch}/params.yaml" <<EOF
+build-dir: ${scratch}
+mount-base: ${scratch}/mnt
+image-dir: ${scratch}
+image-size: 128MiB
+config: /src/dib-ublk/block-device.yaml
+root-fs-type: ext4
+root-label: cloudimg-rootfs
+EOF
+    dib_block_device --params "${scratch}/params.yaml" init
+    dib_block_device --params "${scratch}/params.yaml" create
+    created=1
+    # Match DIB's real cp -ra stage, including directories, links and metadata.
+    mkdir -p "${scratch}/built/usr/share/amphora-smoke"
+    echo 'amphora native ublk smoke test' > "${scratch}/built/usr/share/amphora-smoke/success"
+    ln -s usr/share/amphora-smoke/success "${scratch}/built/marker"
+    cp -ra "${scratch}/built/"* "${scratch}/mnt/"
+    test "$(cat "${scratch}/mnt/marker")" = 'amphora native ublk smoke test'
+    test "$(readlink "${scratch}/mnt/marker")" = usr/share/amphora-smoke/success
+    if [[ ${AMPHORA_SMOKE_LABEL_PROBE:-0} == 1 ]]; then
+        # Overlay filesystems can mask this problem; probe the real image ext4.
+        python3 - "${scratch}/mnt" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+path = Path(sys.argv[1]) / 'guest-label-probe'
+path.touch()
+context = b'system_u:object_r:opencode_guest_unknown_t:s0'
+os.setxattr(path, 'security.selinux', context)
+assert os.getxattr(path, 'security.selinux').rstrip(b'\0') == context
+path.unlink()
+print('Unknown guest SELinux context probe passed')
+PY
+    fi
+    dib_block_device --params "${scratch}/params.yaml" umount
+    unmounted=1
+    qemu-img convert -f raw -O qcow2 "${scratch}/image0.raw" /build/ublk-smoke.qcow2
+    qemu-img check -f qcow2 /build/ublk-smoke.qcow2
+    dib_block_device --params "${scratch}/params.yaml" cleanup
+    rm -rf "${scratch}"
+    trap - EXIT
+else
+    export ELEMENTS_PATH=/src/octavia/elements
+    if [[ ${AMPHORA_SELINUX} == disabled ]]; then
+        export ELEMENTS_PATH=/src/dib-ublk/elements:${ELEMENTS_PATH}
+        echo 'Building an amphora with guest SELinux disabled; offline relabeling is skipped.'
+    fi
+    export DIB_RELEASE=10-stream DIB_YUM_MINIMAL_CREATE_INTERFACES=0
+    export DIB_GRUB_TIMEOUT=0 DIB_CLOUD_INIT_DATASOURCES=ConfigDrive
+    export DIB_OCTAVIA_AMP_USE_NFTABLES=True DIB_OCTAVIA_AMP_USE_SSH=True
+    export DIB_REPOLOCATION_amphora_agent=/src/octavia
+    export DIB_REPOREF_amphora_agent
+    DIB_REPOREF_amphora_agent=$(git -C /src/octavia rev-parse HEAD)
+    export DIB_REPOLOCATION_upper_constraints=file:///amphora-upper-constraints.txt
+    export DIB_INSTALLTYPE_octavia_lib=package
+    cd /build
+    disk-image-create -a amd64 -t qcow2 -o "/build/${IMAGE_NAME}" --no-tmpfs \
+        base vm centos-minimal haproxy-octavia rebind-sshd no-resolvconf \
+        amphora-agent octavia-lib sos cloud-init-datasources remove-default-ints \
+        "${selinux_element}" disable-makecache keepalived-octavia ipvsadmin \
+        pip-cache certs-ramfs
+    qemu-img check -f qcow2 "/build/${IMAGE_NAME}.qcow2"
+fi

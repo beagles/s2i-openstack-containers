@@ -1,0 +1,8 @@
+#!/bin/bash
+set -euo pipefail
+
+# This is an outer hook: only touch the image root supplied by DIB.
+: "${TARGET_ROOT:?DIB must set TARGET_ROOT}"
+[[ ${TARGET_ROOT} != / ]] || { echo 'Refusing the builder root as TARGET_ROOT' >&2; exit 1; }
+grep -q '^SELINUX=disabled$' "${TARGET_ROOT}/etc/selinux/config"
+rm -f "${TARGET_ROOT}/.autorelabel"

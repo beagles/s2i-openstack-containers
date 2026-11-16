@@ -1,0 +1,92 @@
+ARG BASE_IMAGE=localhost/openstack/openstack-base:latest
+
+# Comparison with Containerfile: native ublk, not a QEMU appliance.
+# Context: containers/diskimage-builder. See UBLK.md for host requirements.
+FROM ${BASE_IMAGE} AS ublk-tools
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+COPY octavia-amphora-image/ublkbuilddeps.txt /tmp/ublkbuilddeps.txt
+RUN pkgs=$(grep -vE '^#|^$' /tmp/ublkbuilddeps.txt | tr '\n' ' ') && \
+    microdnf -y install ${pkgs} && microdnf clean all
+COPY octavia-amphora-image/src/ublksrv/ /src/ublksrv/
+WORKDIR /src/ublksrv
+RUN autoreconf -fi && \
+    ./configure --prefix=/usr/local --libdir=/usr/local/lib64 \
+      --without-gnutls --without-libnfs --without-libiscsi && \
+    make -j2 && make DESTDIR=/ublk-install install
+COPY octavia-amphora-image/ublk/check-io-uring.c /tmp/check-io-uring.c
+RUN mkdir -p /ublk-install/usr/local/libexec && \
+    gcc -O2 -Wall -Werror /tmp/check-io-uring.c -luring \
+      -o /ublk-install/usr/local/libexec/amphora-io-uring-check
+
+FROM ${BASE_IMAGE} AS tooling
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG CONSTRAINTS_FILE=requirements.lock
+ARG SOURCE_VERSION_STREAM=master
+ARG AMPHORA_CONSTRAINTS_FILE=upper-constraints.txt.${SOURCE_VERSION_STREAM}
+COPY ${CONSTRAINTS_FILE} /deps-upper-constraints.txt
+COPY ${AMPHORA_CONSTRAINTS_FILE} /amphora-upper-constraints.txt
+COPY sources.txt /source-versions/project.txt
+COPY octavia-amphora-image/sources.txt /source-versions/image.txt
+COPY src/ /src/
+COPY octavia-amphora-image/src/octavia/ /src/octavia/
+COPY octavia-amphora-image/src/gdisk/ /src/gdisk/
+COPY octavia-amphora-image/builddeps-ublk.txt /tmp/builddeps.txt
+RUN pkgs=$(grep -vE '^#|^$' /tmp/builddeps.txt | tr '\n' ' ') && \
+    microdnf -y install ${pkgs} && microdnf clean all && rm /tmp/builddeps.txt
+WORKDIR /src/gdisk
+RUN make -j"$(nproc)" sgdisk && install -m 0755 sgdisk /usr/local/sbin/sgdisk
+ARG PIP_NO_BINARY=""
+ENV PIP_NO_BINARY=${PIP_NO_BINARY}
+COPY pythonbuilddeps.txt /tmp/pythonbuilddeps.txt
+RUN pkgs=$(grep -vE '^#|^$' /tmp/pythonbuilddeps.txt | tr '\n' ' ') && \
+    pip3 install --no-cache-dir -c /deps-upper-constraints.txt ${pkgs}
+# Keep the required container-patched DIB pin. The ublk plugin is additive.
+RUN sed '/^diskimage[-_]builder[=!<>]/Id' /deps-upper-constraints.txt > /tmp/dib-constraints.txt && \
+    version=$(awk -v stream="${SOURCE_VERSION_STREAM}" \
+      '$1 == stream && $2 == "diskimage-builder" { print $6; exit }' /source-versions/project.txt) && \
+    test -n "${version}" && test "${version}" != '-' && \
+    PBR_VERSION="${version}" pip3 wheel --no-cache-dir --no-deps \
+      --no-build-isolation --wheel-dir=/wheels /src/diskimage-builder && \
+    pip3 install --no-cache-dir --prefix=/usr -c /tmp/dib-constraints.txt /wheels/*.whl
+ENV PIP_NO_BINARY=""
+RUN version=$(awk -v stream="${SOURCE_VERSION_STREAM}" \
+      '$1 == stream && $2 == "octavia" { print $6; exit }' /source-versions/image.txt) && \
+    test -n "${version}" && test "${version}" != '-' && \
+    git -C /src/octavia tag -f "${version}" HEAD
+COPY --from=ublk-tools /ublk-install/usr/local/ /usr/local/
+RUN echo /usr/local/lib64 > /etc/ld.so.conf.d/ublksrv.conf && ldconfig
+COPY octavia-amphora-image/ublk/ /src/dib-ublk/
+RUN pip3 install --no-cache-dir --no-deps --no-build-isolation /src/dib-ublk
+COPY octavia-amphora-image/scripts/ublk-preflight /usr/local/bin/amphora-ublk-preflight
+COPY octavia-amphora-image/scripts/build-ublk-image /usr/local/bin/build-amphora-ublk
+RUN chmod 0755 /usr/local/bin/amphora-ublk-preflight /usr/local/bin/build-amphora-ublk
+WORKDIR /build
+
+# No host changes are made by either target. Restricted builders fail early.
+FROM tooling AS smoke
+ARG AMPHORA_UBLK_ID=0
+ARG AMPHORA_SMOKE_LABEL_PROBE=0
+RUN build-amphora-ublk --smoke
+
+FROM tooling AS build
+ARG IMAGE_NAME=amphora-x64-haproxy
+ARG AMPHORA_UBLK_ID=0
+ARG AMPHORA_SELINUX=permissive
+RUN build-amphora-ublk
+
+FROM ${BASE_IMAGE}
+LABEL summary="Octavia amphora image (native ublk build)" \
+      io.k8s.description="CentOS Stream 10 minimal-based Octavia amphora qcow2 image"
+ARG IMAGE_NAME=amphora-x64-haproxy
+ARG AMPHORA_SELINUX=permissive
+LABEL io.openstack.amphora.selinux=${AMPHORA_SELINUX}
+ENV SRC_DIR=/build \
+    DEST_DIR=/target \
+    CHECKSUM_FILE=${IMAGE_NAME}.sha256
+COPY copy_out.sh /copy_out.sh
+COPY --from=build /build/${IMAGE_NAME}.qcow2 /build/
+WORKDIR /build
+RUN chmod 0755 /copy_out.sh && sha256sum "${IMAGE_NAME}.qcow2" > "${CHECKSUM_FILE}"
+ENTRYPOINT ["/copy_out.sh"]

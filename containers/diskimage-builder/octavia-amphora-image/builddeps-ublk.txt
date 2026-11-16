@@ -1,0 +1,26 @@
+# Native DIB build dependencies. No QEMU system emulator or guest kernel.
+binutils
+bzip2
+curl
+device-mapper
+dnf
+dnf-plugins-core
+dosfstools
+e2fsprogs
+findutils
+git
+kpartx
+liburing
+procps-ng
+qemu-img
+sudo
+tar
+util-linux
+which
+xfsprogs
+xz
+# Compile sgdisk (not packaged in RHEL 10).
+gcc-c++
+libuuid-devel
+make
+popt-devel

@@ -1,0 +1,19 @@
+#!/bin/bash
+set -euo pipefail
+
+# Normally called without arguments inside the guest chroot. Keeping the root
+# explicit in the function also permits offline tests without modifying /etc.
+amphora_disable_selinux() {
+    local root=${1:-/}
+    local config="${root%/}/etc/selinux/config"
+    mkdir -p "${root%/}/etc/selinux"
+    if [[ -f ${config} ]]; then
+        sed -i '/^[[:space:]]*SELINUX[[:space:]]*=/d' "${config}"
+    fi
+    printf '\nSELINUX=disabled\n' >> "${config}"
+    rm -f "${root%/}/.autorelabel"
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    amphora_disable_selinux /
+fi

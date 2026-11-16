@@ -1,0 +1,44 @@
+; Opt-in build domain. This does not add permissions to container_t.
+(type amphora_ublk_t)
+(roletype system_r amphora_ublk_t)
+(typeattributeset domain (amphora_ublk_t))
+(typeattributeset container_domain (amphora_ublk_t))
+(typeattributeset container_net_domain (amphora_ublk_t))
+(typeattributeset container_user_domain (amphora_ublk_t))
+(typeattributeset mlsrangetrans (amphora_ublk_t))
+(typeattributeset mcs_constrained_type (amphora_ublk_t))
+(typeattributeset process_user_target (amphora_ublk_t))
+(typeattributeset sandbox_net_domain (amphora_ublk_t))
+(allow amphora_ublk_t proc_type (dir (getattr open search)))
+(allow amphora_ublk_t proc_type (file (ioctl read getattr lock open)))
+; yum-minimal bootstraps with private proc/sysfs/devpts mounts.
+(allow amphora_ublk_t proc_t (filesystem (mount remount unmount)))
+(allow amphora_ublk_t sysfs_t (filesystem (mount remount unmount)))
+(allow amphora_ublk_t devpts_t (filesystem (mount remount unmount)))
+
+; File management equivalent to container_domain_template(..., container).
+(allow amphora_ublk_t container_file_t (dir (ioctl read write create getattr setattr lock unlink link rename open watch watch_reads add_name remove_name reparent search rmdir mounton relabelfrom relabelto map)))
+(allow amphora_ublk_t container_file_t (file (ioctl read write create getattr setattr lock append unlink link rename open watch watch_reads entrypoint execute execute_no_trans map mounton relabelfrom relabelto)))
+(allow amphora_ublk_t container_file_t (lnk_file (ioctl read write create getattr setattr lock append unlink link rename watch watch_reads relabelfrom relabelto map)))
+(allow amphora_ublk_t container_file_t (chr_file (ioctl read write create getattr setattr lock append unlink link rename open map watch watch_reads relabelfrom relabelto)))
+(allow amphora_ublk_t container_file_t (blk_file (ioctl read write create getattr setattr lock append unlink link rename open relabelfrom relabelto map)))
+(allow amphora_ublk_t container_file_t (fifo_file (ioctl read write create getattr setattr lock append unlink link rename open watch relabelfrom relabelto map)))
+(allow amphora_ublk_t container_file_t (sock_file (ioctl read write create getattr setattr lock append unlink link rename open relabelfrom relabelto map)))
+(allow amphora_ublk_t container_file_t (filesystem (mount remount unmount)))
+(typetransition amphora_ublk_t tmpfs_t dir container_file_t)
+(typetransition amphora_ublk_t tmpfs_t file container_file_t)
+(typetransition amphora_ublk_t tmpfs_t lnk_file container_file_t)
+
+; Native DIB operations and the observed io_uring creation denial.
+(allow amphora_ublk_t self (capability (sys_admin mknod sys_chroot)))
+(allow amphora_ublk_t io_uring_t (anon_inode (create map read write)))
+(allow amphora_ublk_t container_file_t (io_uring (cmd)))
+; Newly formatted image filesystems have not received guest labels yet.
+(allow amphora_ublk_t unlabeled_t (dir (ioctl read write getattr search open add_name remove_name)))
+(allowx amphora_ublk_t unlabeled_t (ioctl dir (0x5879)))
+(allow amphora_ublk_t unlabeled_t (file (create read write getattr open unlink)))
+; Give new image content normal container/MCS labels during construction,
+; rather than granting general management of every unlabeled file type.
+(typetransition amphora_ublk_t unlabeled_t dir container_file_t)
+(typetransition amphora_ublk_t unlabeled_t file container_file_t)
+(typetransition amphora_ublk_t unlabeled_t lnk_file container_file_t)

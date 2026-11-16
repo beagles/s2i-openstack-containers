@@ -1,0 +1,9 @@
+# Compile the missing ublk userspace server, not a kernel module.
+autoconf
+automake
+gcc
+gcc-c++
+libtool
+liburing-devel
+make
+pkgconf-pkg-config

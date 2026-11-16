@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amphora-dib-ublk"
+version = "0.1.0"
+description = "Experimental native ublk plugin for the pinned amphora DIB"
+requires-python = ">=3.9"
+
+[project.entry-points."diskimage_builder.block_device.plugin"]
+ublk = "amphora_dib_ublk:Ublk"
+
+[tool.setuptools]
+py-modules = ["amphora_dib_ublk"]

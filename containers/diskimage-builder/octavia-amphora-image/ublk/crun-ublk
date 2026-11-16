@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Build-local crun wrapper for Buildah versions without device-cgroup-rule.
+
+Set BUILDAH_RUNTIME to this executable and AMPHORA_UBLK_DEVICE_RULES to a
+space-separated exact list such as "c:511:0 b:259:4 b:252:1". All ordinary
+crun operations remain unchanged; only the generated create spec is filtered.
+"""
+
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+
+args = sys.argv[1:]
+if "create" in args:
+    if "--bundle" not in args:
+        raise RuntimeError("Expected Buildah's explicit --bundle argument")
+    bundle = Path(args[args.index("--bundle") + 1])
+    rules = os.environ["AMPHORA_UBLK_DEVICE_RULES"].split()
+    if not rules:
+        raise RuntimeError("Explicit device rules are required")
+    config = bundle / "config.json"
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("oci-device-filter.py")), *rules],
+        input=config.read_text(), text=True, capture_output=True, check=True,
+    )
+    config.write_text(result.stdout)
+os.execv("/usr/bin/crun", ["/usr/bin/crun", *args])

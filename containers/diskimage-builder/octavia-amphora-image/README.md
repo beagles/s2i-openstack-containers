@@ -7,6 +7,15 @@ the resulting container copies these artifacts to `/target`, using the same
 built from RPMs using DIB's `centos-minimal` element. No GenericCloud qcow2
 is downloaded or extracted.
 
+For the **native ublk comparison**, use [`Containerfile.ublk`](Containerfile.ublk)
+and see [UBLK.md](UBLK.md). That experimental variant has different host/device
+requirements; the capability-free validation below applies only to the QEMU path.
+Its native smoke build passes. The original full build is blocked at guest
+SELinux labeling on this host; the explicit `AMPHORA_SELINUX=disabled` build
+argument now disables guest SELinux and skips offline relabeling. Full-image
+build/boot validation of that option is pending; no native amphora qcow2 has
+been produced.
+
 ## Sources and constraints
 
 Use `containers/diskimage-builder` as the build context. The repository's

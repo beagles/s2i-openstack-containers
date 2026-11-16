@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Read-only native-build prerequisite checks. Never load modules or change policy."""
+
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+
+
+def problems():
+    errors = []
+    # Block filesystem mounting is not allowed by CAP_SYS_ADMIN in a user namespace.
+    uid_map = Path("/proc/self/uid_map").read_text().split()
+    if uid_map != ["0", "0", "4294967295"]:
+        errors.append("Rootless/user-namespaced builds cannot mount block filesystems; "
+                      "use a dedicated rootful native builder or the QEMU Containerfile.")
+    status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines())
+    caps = int(status["CapEff"].strip(), 16)
+    for bit, name in ((21, "SYS_ADMIN"), (27, "MKNOD"), (18, "SYS_CHROOT")):
+        if not caps & (1 << bit):
+            errors.append("Missing effective CAP_%s." % name)
+    for device in ("/dev/ublk-control", "/dev/mapper/control"):
+        try:
+            if not stat.S_ISCHR(os.stat(device).st_mode):
+                raise OSError("not a character device")
+            fd = os.open(device, os.O_RDWR | os.O_CLOEXEC)
+            os.close(fd)
+        except OSError as exc:
+            errors.append("%s: %s. Host module/device setup and explicit device access are required."
+                          % (device, exc))
+    result = subprocess.run(["/usr/local/libexec/amphora-io-uring-check"],
+                            capture_output=True, text=True)
+    if result.returncode:
+        errors.append(result.stderr.strip() or "io_uring probe failed")
+    return errors
+
+
+def main():
+    errors = problems()
+    if errors:
+        print("Native ublk build prerequisites failed:", file=sys.stderr)
+        for error in errors:
+            print("  - " + error, file=sys.stderr)
+        return 1
+    subprocess.run(["unshare", "--mount", "--propagation", "private", "true"], check=True)
+    print("Native ublk prerequisites passed; the smoke target checks actual block IO/mounts.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
