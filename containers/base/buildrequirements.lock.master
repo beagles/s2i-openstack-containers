@@ -1,4 +1,4 @@
-flit-core==4.1.0
+flit-core==4.2.0
 packaging==26.3
 setuptools-scm==10.3.4
 vcs-versioning==2.6.0
