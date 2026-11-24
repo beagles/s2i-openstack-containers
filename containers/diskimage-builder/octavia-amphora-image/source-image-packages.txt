@@ -1,0 +1,25 @@
+# CentOS Stream 10 source disk baseline, not the build appliance inventory.
+# Octavia/DIB install the amphora packages later, using this OS's repositories.
+bash
+ca-certificates
+cloud-init
+coreutils
+dnf
+dracut
+dracut-config-generic
+dracut-network
+gzip
+kernel-core
+kernel-modules
+kernel-modules-core
+NetworkManager
+openssh-server
+passwd
+policycoreutils
+selinux-policy-targeted
+shadow-utils
+sudo
+systemd
+systemd-udev
+tar
+util-linux

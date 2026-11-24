@@ -1,0 +1,53 @@
+#!/bin/bash
+# Assemble an input disk using regular files only, as with the build appliance.
+set -euo pipefail
+
+if [[ $# != 2 ]]; then
+    echo 'Usage: make-amphora-source-image OS_ROOT OUTPUT.qcow2' >&2
+    exit 2
+fi
+os_root=$1
+output=$2
+size=${AMPHORA_SOURCE_SIZE:-4G}
+[[ -d ${os_root}/etc && ${size} =~ ^[1-9][0-9]*[MG]$ ]] || exit 2
+mkdir -p "$(dirname "${output}")"
+scratch=$(mktemp -d "$(dirname "${output}")/source-image.XXXXXX")
+trap 'rm -rf "${scratch}"' EXIT
+mkdir "${scratch}/root"
+# Preserve numeric ownership and file capabilities, but not container SELinux
+# labels. DIB relabels the final image inside the matching guest kernel.
+tar -C "${os_root}" --numeric-owner --xattrs --xattrs-include='*' \
+    --xattrs-exclude=security.selinux \
+    --exclude='./dev/*' --exclude='./proc/*' --exclude='./sys/*' \
+    --exclude='./run/*' --exclude='./tmp/*' --exclude='./var/tmp/*' \
+    --exclude='./var/cache/*' --exclude='./var/log/*' \
+    --exclude='./.dockerenv' --exclude='./.containerenv' \
+    --exclude='./etc/hostname' --exclude='./etc/hosts' \
+    --exclude='./etc/resolv.conf' --exclude='./etc/fstab' \
+    --exclude='./etc/machine-id' --exclude='./var/lib/dbus/machine-id' \
+    --exclude='./etc/ssh/ssh_host_*' --exclude='./var/lib/cloud/*' \
+    --exclude='./root/.bash_history' -cf - . |
+    tar -C "${scratch}/root" --numeric-owner --xattrs --xattrs-include='*' \
+        --xattrs-exclude=security.selinux -xf -
+mkdir -p "${scratch}/root"/{dev,proc,sys,run,tmp,var/tmp,var/log,var/cache}
+chmod 1777 "${scratch}/root"/{tmp,var/tmp}
+touch "${scratch}/root/etc/machine-id"
+
+# This is a container filesystem, not a cloud image with kernel-install's
+# BLS entries. Otherwise grub2-mkconfig defaults to blscfg and emits no kernel
+# menu at all. Let DIB generate direct entries from /boot/vmlinuz-* instead.
+mkdir -p "${scratch}/root/etc/default"
+touch "${scratch}/root/etc/default/grub"
+sed -i '/^[[:space:]]*GRUB_ENABLE_BLSCFG=/d' "${scratch}/root/etc/default/grub"
+printf 'GRUB_ENABLE_BLSCFG=false\n' >> "${scratch}/root/etc/default/grub"
+
+# extract-image expects a partition table, not a bare filesystem qcow2.
+# One Linux root partition is sufficient; DIB installs the final bootloader.
+raw=${scratch}/source.raw
+truncate -s "${size}" "${raw}"
+printf 'label: dos\nstart=2048, type=83, bootable\n' | sfdisk "${raw}"
+bytes=$(stat -c %s "${raw}")
+mkfs.ext4 -q -F -b 4096 -E offset=1048576 \
+    -d "${scratch}/root" "${raw}" "$(((bytes - 1048576) / 4096))"
+qemu-img convert -f raw -O qcow2 "${raw}" "${output}"
+qemu-img check -f qcow2 "${output}"

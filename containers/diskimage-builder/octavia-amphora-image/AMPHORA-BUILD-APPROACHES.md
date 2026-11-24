@@ -1,5 +1,11 @@
 # Octavia amphora image build: QEMU appliance vs. native ublk
 
+For an alternative **source-image input** to the QEMU build, see
+[SOURCE-IMAGE.md](SOURCE-IMAGE.md) and `Containerfile.source-image`. That
+variant prepares a local CentOS qcow2 and invokes Octavia's wrapper with
+`DIB_LOCAL_IMAGE`; it changes OS sourcing, not the device/isolation backend
+compared below.
+
 Spike summary comparing two ways of running diskimage-builder (DIB) **inside a
 container build** to produce an Octavia amphora image
 (`amphora-x64-haproxy.qcow2`, CentOS Stream 10, `centos-minimal`).

@@ -43,6 +43,10 @@ mkdir -p /run/amphora-config
 mount -o ro /dev/vdc /run/amphora-config
 source /run/amphora-config/build.env
 umount /run/amphora-config
+if [[ ${AMPHORA_BUILD_METHOD:-minimal} == source-image ]]; then
+    mkdir -p /source-image
+    mount -o ro /dev/vdd /source-image
+fi
 
 ip link set lo up
 for iface in /sys/class/net/*; do

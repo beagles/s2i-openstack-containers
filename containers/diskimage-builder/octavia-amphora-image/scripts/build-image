@@ -18,6 +18,21 @@ if [[ ${AMPHORA_SMOKE:-0} == 1 ]]; then
     kpartx -d "${device}"
     losetup -d "${device}"
     qemu-img convert -f raw -O qcow2 /work/smoke.raw "/work/output/${IMAGE_NAME}.qcow2"
+elif [[ ${AMPHORA_BUILD_METHOD:-minimal} == source-image ]]; then
+    export DIB_LOCAL_IMAGE=${DIB_LOCAL_IMAGE:-/source-image/centos-source.qcow2}
+    test -s "${DIB_LOCAL_IMAGE}"
+    export DIB_LOCAL_ELEMENTS_PATH=${DIB_LOCAL_ELEMENTS_PATH:-/source-image/elements}
+    export DIB_BIND_MOUNTS=1 DIB_NO_TMPFS=1
+    export DIB_REPOLOCATION_amphora_agent=/src/octavia
+    export DIB_REPOREF_amphora_agent
+    DIB_REPOREF_amphora_agent=$(git -C /src/octavia rev-parse HEAD)
+    export DIB_REPOLOCATION_upper_constraints=file:///amphora-upper-constraints.txt
+    export DIB_INSTALLTYPE_octavia_lib=package
+    # Keep the standard Octavia element sequence. The scoped centos-minimal
+    # adapter selects DIB's centos (local qcow2) root instead of RPM bootstrap.
+    bash /src/octavia/diskimage-create/diskimage-create.sh \
+        -a amd64 -i centos -d 10-stream -f -s "${AMPHORA_IMAGE_SIZE:-3}" \
+        -c /work/dib-cache -w /work -o "/work/output/${IMAGE_NAME}.qcow2" -t qcow2
 else
     export ELEMENTS_PATH=/src/octavia/elements
     export DIB_RELEASE=10-stream DIB_YUM_MINIMAL_CREATE_INTERFACES=0

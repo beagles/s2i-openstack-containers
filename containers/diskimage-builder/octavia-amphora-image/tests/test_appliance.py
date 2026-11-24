@@ -112,6 +112,42 @@ class ApplianceRunnerTest(unittest.TestCase):
                                 "bash", str(self.config)], capture_output=True, text=True)
         self.assertEqual(check.stdout, value)
 
+    def test_source_image_is_a_fourth_readonly_drive(self):
+        source = self.root / "source-image.ext4"
+        source.write_text("mock input disk")
+        result = self.run_appliance(AMPHORA_BUILD_METHOD="source-image",
+                                    AMPHORA_SOURCE_DISK=str(source),
+                                    AMPHORA_IMAGE_SIZE="5")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        args = next(args for tool, args in calls if tool == "qemu-system-x86_64")
+        drives = [args[i + 1] for i, arg in enumerate(args) if arg == "-drive"]
+        self.assertEqual(len(drives), 4)
+        self.assertEqual(drives[-1],
+                         f"file={source},format=raw,if=virtio,readonly=on")
+        config = self.config.read_text()
+        self.assertIn("export AMPHORA_BUILD_METHOD=source-image\n", config)
+        self.assertIn("export AMPHORA_IMAGE_SIZE=5\n", config)
+        self.assertNotIn("AMPHORA_SOURCE_DISK", config)
+
+    def test_source_image_requires_nonempty_input_disk(self):
+        source = self.root / "absent.ext4"
+        self.assertNotEqual(self.run_appliance(
+            AMPHORA_BUILD_METHOD="source-image",
+            AMPHORA_SOURCE_DISK=str(source)).returncode, 0)
+        source.touch()
+        self.assertNotEqual(self.run_appliance(
+            AMPHORA_BUILD_METHOD="source-image",
+            AMPHORA_SOURCE_DISK=str(source)).returncode, 0)
+
+    def test_invalid_source_configuration(self):
+        for settings in ({"AMPHORA_BUILD_METHOD": "unknown"},
+                         {"AMPHORA_IMAGE_SIZE": "0"},
+                         {"AMPHORA_IMAGE_SIZE": "3;false"},
+                         {"AMPHORA_BUILD_METHOD": "source-image",
+                          "AMPHORA_SOURCE_DISK": "/input,readonly=off"}):
+            self.assertNotEqual(self.run_appliance(**settings).returncode, 0)
+
     def test_invalid_names_and_arguments(self):
         for name in ("../escape", "bad name", "x;false", "-option"):
             self.assertNotEqual(self.run_appliance(IMAGE_NAME=name).returncode, 0)

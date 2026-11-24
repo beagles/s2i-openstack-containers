@@ -7,6 +7,13 @@ the resulting container copies these artifacts to `/target`, using the same
 built from RPMs using DIB's `centos-minimal` element. No GenericCloud qcow2
 is downloaded or extracted.
 
+For an **alternative CentOS source-image build**, use
+[`Containerfile.source-image`](Containerfile.source-image) and see
+[SOURCE-IMAGE.md](SOURCE-IMAGE.md). It prepares a local CentOS qcow2 from
+container OS content (following EDPM's separation of OS content and builder),
+then passes it as `DIB_LOCAL_IMAGE` to Octavia's `diskimage-create.sh` inside
+the same QEMU appliance, rather than bootstrapping with `centos-minimal`.
+
 For the **native ublk comparison**, use [`Containerfile.ublk`](Containerfile.ublk)
 and see [UBLK.md](UBLK.md). That experimental variant has different host/device
 requirements; the capability-free validation below applies only to the QEMU path.
