@@ -30,7 +30,7 @@ jsonpointer==3.1.1
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 keystoneauth1==5.17.0
-keystonemiddleware==13.0.1
+keystonemiddleware==13.0.2
 kombu==5.6.2
 lxml==6.1.1
 mako==1.4.1
@@ -49,7 +49,7 @@ oslo-context==6.5.0
 oslo-db==18.1.1
 oslo-i18n==6.9.0
 oslo-log==8.3.2
-oslo-messaging==18.3.0
+oslo-messaging==18.3.1
 oslo-metrics==0.17.0
 oslo-middleware==8.2.0
 oslo-policy==6.0.1
@@ -84,7 +84,7 @@ python-manilaclient==6.3.0
 python-memcached==1.62
 python-observabilityclient==1.4.0
 python-octaviaclient==3.15.0
-python-openstackclient==10.3.0
+python-openstackclient==10.3.1
 python-swiftclient==4.11.0
 pyyaml==6.0.3
 redis==8.1.0
